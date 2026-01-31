@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Couchbase Rebalancing - Zero Downtime Explained</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            color: #2d3748;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #718096;
+            margin-bottom: 40px;
+            font-size: 1.2em;
+        }
+
+        .navigation {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .nav-btn {
+            padding: 10px 20px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+
+        .nav-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .nav-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .step {
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .step.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .step-title {
+            color: #667eea;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            border-left: 5px solid #667eea;
+            padding-left: 15px;
+        }
+
+        .diagram {
+            background: #f7fafc;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+            border: 2px solid #e2e8f0;
+        }
+
+        .node-container {
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-start;
+            gap: 20px;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+
+        .node {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            min-width: 150px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .node.new {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+
+        .node.removing {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+            opacity: 0.6;
+        }
+
+        .node-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .vbucket-container {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .vbucket {
+            width: 30px;
+            height: 30px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .vbucket.active {
+            background: #fbbf24;
+            color: #78350f;
+        }
+
+        .vbucket.replica {
+            background: rgba(255,255,255,0.6);
+            color: #4a5568;
+        }
+
+        .vbucket.moving {
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .client {
+            background: #4299e1;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            display: inline-block;
+            margin: 20px;
+            box-shadow: 0 4px 10px rgba(66, 153, 225, 0.3);
+        }
+
+        .arrow {
+            text-align: center;
+            font-size: 2em;
+            color: #667eea;
+            margin: 10px 0;
+        }
+
+        .info-box {
+            background: #edf2f7;
+            border-left: 4px solid #667eea;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+
+        .info-box.success {
+            background: #f0fff4;
+            border-left-color: #48bb78;
+        }
+
+        .info-box.warning {
+            background: #fffaf0;
+            border-left-color: #ed8936;
+        }
+
+        .key-point {
+            background: #667eea;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .key-point h3 {
+            margin-bottom: 10px;
+        }
+
+        .flow-diagram {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .flow-number {
+            background: #667eea;
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 25px;
+            height: 25px;
+            border-radius: 5px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #2d3748;
+        }
+
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+
+        code {
+            background: #2d3748;
+            color: #68d391;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .highlight {
+            background: #fef5e7;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .node-container {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 Couchbase Rebalancing</h1>
+        <p class="subtitle">How Zero-Downtime Works During Node Addition/Removal</p>
+
+        <div class="navigation">
+            <button class="nav-btn active" onclick="showStep(0)">Overview</button>
+            <button class="nav-btn" onclick="showStep(1)">Step 1: Initial State</button>
+            <button class="nav-btn" onclick="showStep(2)">Step 2: Smart Client</button>
+            <button class="nav-btn" onclick="showStep(3)">Step 3: Rebalance Start</button>
+            <button class="nav-btn" onclick="showStep(4)">Step 4: vBucket Move</button>
+            <button class="nav-btn" onclick="showStep(5)">Step 5: Atomic Switch</button>
+            <button class="nav-btn" onclick="showStep(6)">Step 6: Safety Net</button>
+            <button class="nav-btn" onclick="showStep(7)">Summary</button>
+        </div>
+
+        <!-- Step 0: Overview -->
+        <div class="step active" id="step-0">
+            <h2 class="step-title">Overview: The Big Picture</h2>
+            
+            <div class="key-point">
+                <h3>🎯 The Goal</h3>
+                <p>Add or remove nodes from a Couchbase cluster without ANY downtime or data access interruption - even for a millisecond!</p>
+            </div>
+
+            <div class="info-box">
+                <h3><strong>Key Concepts You Need to Know:</strong></h3>
+                <ul style="margin-left: 20px; margin-top: 10px; line-height: 1.8;">
+                    <li><strong>vBuckets:</strong> Couchbase divides data into 1024 virtual buckets (like drawers in a filing cabinet)</li>
+                    <li><strong>Smart Client:</strong> Your application knows exactly which node owns which vBucket</li>
+                    <li><strong>vBucket Map:</strong> A live directory that tells clients where each vBucket lives</li>
+                    <li><strong>Atomic Switchover:</strong> vBuckets change ownership instantly - never leaving data inaccessible</li>
+                </ul>
+            </div>
+
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px; color: #2d3748;">The 6-Step Process</h3>
+                <div class="flow-diagram">
+                    <div class="flow-step">
+                        <div class="flow-number">1</div>
+                        <div>
+                            <strong>Initial State:</strong> Cluster running with data distributed across nodes
+                        </div>
+                    </div>
+                    <div class="flow-step">
+                        <div class="flow-number">2</div>
+                        <div>
+                            <strong>Smart Client Connection:</strong> App connects and receives vBucket map
+                        </div>
+                    </div>
+                    <div class="flow-step">
+                        <div class="flow-number">3</div>
+                        <div>
+                            <strong>Rebalance Initiated:</strong> New node added, fast-forward map sent to clients
+                        </div>
+                    </div>
+                    <div class="flow-step">
+                        <div class="flow-number">4</div>
+                        <div>
+                            <strong>vBucket Migration:</strong> Data copied to new nodes in background
+                        </div>
+                    </div>
+                    <div class="flow-step">
+                        <div class="flow-number">5</div>
+                        <div>
+                            <strong>Atomic Switchover:</strong> New vBuckets become active instantly
+                        </div>
+                    </div>
+                    <div class="flow-step">
+                        <div class="flow-number">6</div>
+                        <div>
+                            <strong>Safety Net:</strong> "Not my vBucket" mechanism handles any edge cases
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box success">
+                <strong>✅ Result:</strong> Your application continues reading and writing data throughout the entire process with ZERO downtime!
+            </div>
+        </div>
+
+        <!-- Step 1: Initial State -->
+        <div class="step" id="step-1">
+            <h2 class="step-title">Step 1: Initial State - Data Distribution</h2>
+            
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">3-Node Cluster (Before Rebalance)</h3>
+                
+                <div class="node-container">
+                    <div class="node">
+                        <div class="node-title">Node 1</div>
+                        <div>10.0.0.1</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">0</div>
+                            <div class="vbucket active">1</div>
+                            <div class="vbucket active">2</div>
+                            <div class="vbucket replica">512</div>
+                            <div class="vbucket replica">513</div>
+                        </div>
+                    </div>
+                    
+                    <div class="node">
+                        <div class="node-title">Node 2</div>
+                        <div>10.0.0.2</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">3</div>
+                            <div class="vbucket active">4</div>
+                            <div class="vbucket active">5</div>
+                            <div class="vbucket replica">0</div>
+                            <div class="vbucket replica">1</div>
+                        </div>
+                    </div>
+                    
+                    <div class="node">
+                        <div class="node-title">Node 3</div>
+                        <div>10.0.0.3</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">6</div>
+                            <div class="vbucket active">7</div>
+                            <div class="vbucket active">8</div>
+                            <div class="vbucket replica">3</div>
+                            <div class="vbucket replica">4</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #fbbf24;"></div>
+                        <span>Active vBucket (handles reads/writes)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(255,255,255,0.6); border: 1px solid #ccc;"></div>
+                        <span>Replica vBucket (backup copy)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <p><strong>What's Happening:</strong></p>
+                <ul style="margin-left: 20px; margin-top: 10px; line-height: 1.8;">
+                    <li>Couchbase has divided all data into <span class="highlight">1024 vBuckets</span> (we're showing just a few for clarity)</li>
+                    <li>Each vBucket has an <span class="highlight">active copy</span> (yellow) that handles all operations</li>
+                    <li>Each vBucket also has <span class="highlight">replica copies</span> (white) for high availability</li>
+                    <li>vBuckets are evenly distributed across all nodes</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Step 2: Smart Client -->
+        <div class="step" id="step-2">
+            <h2 class="step-title">Step 2: How Your Application Connects (Smart Client)</h2>
+            
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">Connection Process</h3>
+                
+                <div style="text-align: center;">
+                    <div class="client">
+                        <strong>Your Application</strong><br>
+                        Connection String:<br>
+                        <code>couchbase://10.0.0.1,10.0.0.2,10.0.0.3</code>
+                    </div>
+                    
+                    <div class="arrow">⬇️</div>
+                    
+                    <div style="background: #f7fafc; padding: 20px; border-radius: 10px; display: inline-block;">
+                        <strong>1. Initial Bootstrap</strong><br>
+                        Client connects to ANY node from the list<br>
+                        (even if one is down, it tries the others)
+                    </div>
+                    
+                    <div class="arrow">⬇️</div>
+                    
+                    <div style="background: #fff5f5; padding: 20px; border-radius: 10px; display: inline-block; border: 2px solid #fc8181;">
+                        <strong>2. Receives vBucket Map</strong><br>
+                        <div style="margin-top: 10px; font-family: monospace; font-size: 14px; text-align: left;">
+                            vBucket 0 → Node 1 (active)<br>
+                            vBucket 1 → Node 1 (active)<br>
+                            vBucket 2 → Node 1 (active)<br>
+                            vBucket 3 → Node 2 (active)<br>
+                            vBucket 4 → Node 2 (active)<br>
+                            ...(and 1019 more)
+                        </div>
+                    </div>
+                    
+                    <div class="arrow">⬇️</div>
+                    
+                    <div style="background: #f0fff4; padding: 20px; border-radius: 10px; display: inline-block; border: 2px solid #48bb78;">
+                        <strong>3. Streaming Connection Stays Open</strong><br>
+                        Client receives real-time updates to the map
+                    </div>
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>🔑 Critical Understanding</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    Your connection string (node-1, node-2, node-3) is <strong>ONLY</strong> used for the initial bootstrap. 
+                    After that, the SDK <strong>discards this list</strong> and uses the vBucket map to know exactly which 
+                    node to contact for each operation. This is called a <strong>"Smart Client"</strong>.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <p><strong>Example: Reading a Document</strong></p>
+                <div style="margin-top: 15px; background: white; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 14px;">
+                    <div style="color: #48bb78;">// App wants to read document "user::123"</div>
+                    <div style="margin: 10px 0;">
+                        1. Hash("user::123") → vBucket #42<br>
+                        2. Check vBucket Map → vBucket #42 is on Node 2<br>
+                        3. Send request directly to Node 2<br>
+                    </div>
+                    <div style="color: #667eea;">→ No round-robin needed! Client knows exactly where to go.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Rebalance Start -->
+        <div class="step" id="step-3">
+            <h2 class="step-title">Step 3: Rebalance Initiated - Adding Node 4</h2>
+            
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">New Node Added to Cluster</h3>
+                
+                <div class="node-container">
+                    <div class="node">
+                        <div class="node-title">Node 1</div>
+                        <div>10.0.0.1</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">0</div>
+                            <div class="vbucket active">1</div>
+                            <div class="vbucket active">2</div>
+                        </div>
+                    </div>
+                    
+                    <div class="node">
+                        <div class="node-title">Node 2</div>
+                        <div>10.0.0.2</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">3</div>
+                            <div class="vbucket active">4</div>
+                            <div class="vbucket active">5</div>
+                        </div>
+                    </div>
+                    
+                    <div class="node">
+                        <div class="node-title">Node 3</div>
+                        <div>10.0.0.3</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">6</div>
+                            <div class="vbucket active">7</div>
+                            <div class="vbucket active">8</div>
+                        </div>
+                    </div>
+                    
+                    <div class="node new">
+                        <div class="node-title">Node 4 (NEW!)</div>
+                        <div>10.0.0.4</div>
+                        <div class="vbucket-container">
+                            <div style="padding: 10px; color: white;">Empty<br>(for now)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box warning">
+                <h3><strong>⚡ Fast-Forward Map Sent to Clients</strong></h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    <strong>Before any data moves</strong>, Couchbase sends an updated vBucket map to all connected clients. 
+                    This map shows the <strong>future state</strong> - where vBuckets will be after rebalance completes.
+                </p>
+            </div>
+
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 15px;">Fast-Forward Map Example</h3>
+                <div style="background: white; padding: 20px; border-radius: 10px; font-family: monospace; font-size: 14px;">
+                    <div style="color: #718096;">// OLD MAP (current state):</div>
+                    <div>vBucket 2 → Node 1 ✅ (still active)</div>
+                    <div style="margin-top: 15px; color: #718096;">// NEW MAP (future state):</div>
+                    <div style="color: #48bb78;">vBucket 2 → Node 4 📍 (will become active)</div>
+                    <div style="margin-top: 15px; color: #667eea; font-style: italic;">
+                        Client now knows: "vBucket 2 is moving from Node 1 to Node 4"
+                    </div>
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>Why This Matters</h3>
+                <p style="margin-top: 10px;">
+                    Clients get a "heads up" about the changes. If they try to access a vBucket 
+                    during the transition, they know both the OLD and NEW locations, making the 
+                    handoff seamless.
+                </p>
+            </div>
+        </div>
+
+        <!-- Step 4: vBucket Move -->
+        <div class="step" id="step-4">
+            <h2 class="step-title">Step 4: vBucket Migration (Data Copying)</h2>
+            
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">Background Data Transfer</h3>
+                
+                <div style="display: flex; justify-content: center; gap: 40px; align-items: center; flex-wrap: wrap;">
+                    <div class="node">
+                        <div class="node-title">Node 1 (Source)</div>
+                        <div>10.0.0.1</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">2</div>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 12px;">
+                            📤 Streaming data out<br>
+                            Still serving requests!
+                        </div>
+                    </div>
+                    
+                    <div style="font-size: 3em;">➡️</div>
+                    
+                    <div class="node new">
+                        <div class="node-title">Node 4 (Destination)</div>
+                        <div>10.0.0.4</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket moving">2</div>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 12px;">
+                            📥 Receiving data<br>
+                            Building vBucket...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h3><strong>What's Happening in the Background:</strong></h3>
+                <div style="margin-top: 15px;">
+                    <div class="flow-diagram">
+                        <div class="flow-step">
+                            <div class="flow-number">1</div>
+                            <div>
+                                <strong>Initial Data Transfer:</strong> Node 4 starts receiving all existing data from vBucket 2
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">2</div>
+                            <div>
+                                <strong>Ongoing Writes:</strong> Any NEW writes to vBucket 2 are tracked and will be sent
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">3</div>
+                            <div>
+                                <strong>Catch-up Phase:</strong> Node 4 receives the delta (changes made during transfer)
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">4</div>
+                            <div>
+                                <strong>Almost Synchronized:</strong> When < 1000 items remain, prepare for switchover
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>🎯 Zero Impact on Your Application</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    During this entire phase:<br>
+                    ✅ Your app continues reading from Node 1's vBucket 2<br>
+                    ✅ Your app continues writing to Node 1's vBucket 2<br>
+                    ✅ All operations work normally - no errors, no slowdowns<br>
+                    ✅ Data transfer happens in the background using available bandwidth
+                </p>
+            </div>
+        </div>
+
+        <!-- Step 5: Atomic Switch -->
+        <div class="step" id="step-5">
+            <h2 class="step-title">Step 5: The Atomic Switchover (The Magic Moment!)</h2>
+            
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">Instant Ownership Transfer</h3>
+                
+                <div style="text-align: center; padding: 30px;">
+                    <div style="background: #fff5f5; padding: 25px; border-radius: 15px; display: inline-block; margin-bottom: 30px;">
+                        <div style="font-size: 1.5em; color: #e53e3e; margin-bottom: 10px;">⏰ T-minus 0 seconds</div>
+                        <div>vBucket 2 on Node 4 is now 100% synchronized</div>
+                    </div>
+                    
+                    <div style="font-size: 4em; margin: 20px 0;">⚡</div>
+                    
+                    <div style="background: #f0fff4; padding: 25px; border-radius: 15px; display: inline-block;">
+                        <div style="font-size: 1.5em; color: #48bb78; margin-bottom: 10px;">✅ ATOMIC SWITCH</div>
+                        <div style="font-weight: bold;">
+                            Node 4's vBucket 2 is now ACTIVE<br>
+                            Node 1's vBucket 2 becomes REPLICA
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="node-container" style="margin-top: 30px;">
+                    <div class="node" style="opacity: 0.6;">
+                        <div class="node-title">Node 1</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket replica">2</div>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 13px;">
+                            Now a replica<br>
+                            (backup only)
+                        </div>
+                    </div>
+                    
+                    <div style="font-size: 3em; align-self: center;">🔄</div>
+                    
+                    <div class="node new">
+                        <div class="node-title">Node 4</div>
+                        <div class="vbucket-container">
+                            <div class="vbucket active">2</div>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 13px;">
+                            Now ACTIVE!<br>
+                            Serving requests
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>🎪 What "Atomic" Means</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    "Atomic" means this switch happens <strong>instantly and indivisibly</strong> - like flipping a light switch.<br><br>
+                    
+                    <strong>There is NEVER a moment where:</strong><br>
+                    ❌ Both vBuckets are inactive (data inaccessible)<br>
+                    ❌ Both vBuckets are active (causing conflicts)<br>
+                    ❌ Requests are in limbo or lost<br><br>
+                    
+                    <strong>Instead:</strong><br>
+                    ✅ The switch happens in <span style="background: #fef5e7; padding: 2px 6px; border-radius: 3px;">microseconds</span><br>
+                    ✅ All clients are instantly notified via the vBucket map update<br>
+                    ✅ Future requests automatically go to Node 4
+                </p>
+            </div>
+
+            <div class="info-box success">
+                <strong>Result:</strong> Your application experiences ZERO downtime. One nanosecond it's reading from 
+                Node 1, the next nanosecond it's reading from Node 4, and it doesn't even know the difference!
+            </div>
+        </div>
+
+        <!-- Step 6: Safety Net -->
+        <div class="step" id="step-6">
+            <h2 class="step-title">Step 6: The Safety Net ("Not My vBucket")</h2>
+            
+            <div class="info-box warning">
+                <p><strong>Edge Case Scenario:</strong> What if a client's request is "in flight" during the atomic switch?</p>
+            </div>
+
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">The Safety Mechanism</h3>
+                
+                <div style="padding: 20px;">
+                    <div class="flow-diagram">
+                        <div class="flow-step">
+                            <div class="flow-number">1</div>
+                            <div>
+                                <strong>Client sends request to Node 1</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    GET user::123 from vBucket 2
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-step" style="background: #fff5f5;">
+                            <div class="flow-number" style="background: #e53e3e;">!</div>
+                            <div>
+                                <strong>Meanwhile: Atomic switch happens!</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    vBucket 2 is now active on Node 4, not Node 1
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-step">
+                            <div class="flow-number">2</div>
+                            <div>
+                                <strong>Node 1 receives the request</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    "Wait, vBucket 2 isn't active on me anymore!"
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-step" style="background: #fffaf0;">
+                            <div class="flow-number">3</div>
+                            <div>
+                                <strong>Node 1 responds: "NOT MY VBUCKET"</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    Error code sent back to client with updated map
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-step">
+                            <div class="flow-number">4</div>
+                            <div>
+                                <strong>Client updates its vBucket map</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    "Oh! vBucket 2 is now on Node 4"
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-step" style="background: #f0fff4;">
+                            <div class="flow-number">5</div>
+                            <div>
+                                <strong>Client automatically retries to Node 4</strong><br>
+                                <span style="font-size: 14px; color: #718096;">
+                                    Request succeeds! ✅
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>🛡️ Why This is Brilliant</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    This "Not My vBucket" mechanism is the final safety net that ensures <strong>zero data loss</strong> 
+                    and <strong>zero failed operations</strong>, even in the microseconds during which the atomic switch occurs.<br><br>
+                    
+                    <strong>From your application's perspective:</strong><br>
+                    • The SDK handles this automatically<br>
+                    • You never see an error<br>
+                    • The retry is transparent and instant<br>
+                    • Your code doesn't need any special logic
+                </p>
+            </div>
+
+            <div class="info-box success">
+                <strong>🎯 Bottom Line:</strong> Even in the absolute worst-case timing scenario, your application 
+                experiences a tiny retry delay (milliseconds), but NEVER a failed operation or data loss.
+            </div>
+        </div>
+
+        <!-- Step 7: Summary -->
+        <div class="step" id="step-7">
+            <h2 class="step-title">Summary: Why You Get Zero Downtime</h2>
+            
+            <div class="key-point">
+                <h3>🏆 The Complete Picture</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    Couchbase achieves zero-downtime rebalancing through a combination of sophisticated mechanisms 
+                    working together seamlessly.
+                </p>
+            </div>
+
+            <div class="diagram">
+                <h3 style="text-align: center; margin-bottom: 20px;">The 5 Key Mechanisms</h3>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;">
+                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px;">
+                        <div style="font-size: 2em; margin-bottom: 10px;">1️⃣</div>
+                        <h4>vBucket Architecture</h4>
+                        <p style="margin-top: 10px; font-size: 14px;">
+                            Data divided into 1024 moveable units, enabling precise redistribution
+                        </p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); color: white; padding: 20px; border-radius: 10px;">
+                        <div style="font-size: 2em; margin-bottom: 10px;">2️⃣</div>
+                        <h4>Smart Client</h4>
+                        <p style="margin-top: 10px; font-size: 14px;">
+                            Knows exactly where each vBucket lives, eliminating guesswork
+                        </p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%); color: white; padding: 20px; border-radius: 10px;">
+                        <div style="font-size: 2em; margin-bottom: 10px;">3️⃣</div>
+                        <h4>Fast-Forward Map</h4>
+                        <p style="margin-top: 10px; font-size: 14px;">
+                            Clients get advance notice of changes before they happen
+                        </p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%); color: white; padding: 20px; border-radius: 10px;">
+                        <div style="font-size: 2em; margin-bottom: 10px;">4️⃣</div>
+                        <h4>Atomic Switchover</h4>
+                        <p style="margin-top: 10px; font-size: 14px;">
+                            Ownership changes instantly with zero gap in availability
+                        </p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 20px; border-radius: 10px;">
+                        <div style="font-size: 2em; margin-bottom: 10px;">5️⃣</div>
+                        <h4>"Not My vBucket"</h4>
+                        <p style="margin-top: 10px; font-size: 14px;">
+                            Safety net catches any edge cases with automatic retry
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h3><strong>Your Connection String: Best Practices</strong></h3>
+                <div style="margin-top: 15px; line-height: 1.8;">
+                    ✅ <strong>Include at least 3 nodes:</strong> <code>couchbase://node1,node2,node3</code><br>
+                    ✅ <strong>Remember:</strong> These are only used for initial bootstrap<br>
+                    ✅ <strong>After connection:</strong> SDK uses the vBucket map exclusively<br>
+                    ✅ <strong>After rebalance:</strong> Update your config to reference current nodes<br>
+                    ✅ <strong>Consider DNS-SRV:</strong> For automatic node discovery
+                </div>
+            </div>
+
+            <div class="key-point">
+                <h3>📊 Performance During Rebalance</h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    <strong>What to expect:</strong><br>
+                    • Operations: ✅ Uninterrupted<br>
+                    • Availability: ✅ 100%<br>
+                    • Data Loss: ✅ Zero<br>
+                    • Response Time: ⚠️ May increase slightly due to network/disk load<br>
+                    • Throughput: ⚠️ May decrease slightly (10-20% typical)<br><br>
+                    
+                    <strong>Best Practice:</strong> Schedule rebalances during off-peak hours when possible, 
+                    not because of downtime concerns, but to minimize performance impact.
+                </p>
+            </div>
+
+            <div class="info-box success">
+                <h3><strong>🎓 Learning Hint</strong></h3>
+                <p style="margin-top: 10px; line-height: 1.8;">
+                    The key takeaway: Couchbase was designed from the ground up for elasticity. Adding or removing 
+                    nodes is a normal, safe operation that can happen while your application runs. You don't need 
+                    special handling code - the SDK does all the heavy lifting automatically.
+                </p>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-secondary" onclick="previousStep()">⬅️ Previous</button>
+            <button class="btn btn-primary" onclick="nextStep()">Next ➡️</button>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 0;
+        const totalSteps = 8;
+
+        function showStep(stepIndex) {
+            // Hide all steps
+            document.querySelectorAll('.step').forEach(step => {
+                step.classList.remove('active');
+            });
+            
+            // Remove active class from all nav buttons
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected step
+            document.getElementById(`step-${stepIndex}`).classList.add('active');
+            document.querySelectorAll('.nav-btn')[stepIndex].classList.add('active');
+            
+            currentStep = stepIndex;
+            
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function nextStep() {
+            if (currentStep < totalSteps - 1) {
+                showStep(currentStep + 1);
+            }
+        }
+
+        function previousStep() {
+            if (currentStep > 0) {
+                showStep(currentStep - 1);
+            }
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight') {
+                nextStep();
+            } else if (e.key === 'ArrowLeft') {
+                previousStep();
+            }
+        });
+    </script>
+</body>
+</html>
